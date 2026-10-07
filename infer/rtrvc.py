@@ -23,6 +23,26 @@ def printt(strr, *args):
         print(strr % args)
 
 
+def blend_index_features(features, distances, neighbors, vectors, index_rate):
+    valid = (neighbors >= 0) & np.isfinite(distances)
+    weights = np.zeros_like(distances, dtype=np.float32)
+    weights[valid] = 1 / np.maximum(distances[valid], 1e-6) ** 2
+    totals = weights.sum(axis=1, keepdims=True)
+    available = totals[:, 0] > 0
+    if not available.any():
+        return features, available
+
+    weights = np.divide(weights, totals, out=weights, where=totals > 0)
+    safe_neighbors = np.where(valid, neighbors, 0)
+    retrieved = np.sum(vectors[safe_neighbors] * weights[..., None], axis=1)
+    blended = features.copy()
+    blended[available] = (
+        features[available] * (1 - index_rate)
+        + retrieved[available] * index_rate
+    )
+    return blended, available
+
+
 def get_synthesizer(pth_path, device=torch.device("cpu")):
     from infer.module.models import (
         SynthesizerTrnMs256NSFsid,
@@ -251,26 +271,23 @@ class RVC:
             if hasattr(self, "index") and self.index_rate != 0:
                 npy = feats[0][skip_head // 2 :].cpu().numpy().astype("float32")
                 score, ix = self.index.search(npy, k=8)
-                if (ix >= 0).all():
-                    weight = np.square(1 / score)
-                    weight /= weight.sum(axis=1, keepdims=True)
-                    npy = np.sum(
-                        self.big_npy[ix] * np.expand_dims(weight, axis=2), axis=1
-                    )
-                    if self.config.is_half:
-                        npy = npy.astype("float16")
-                    feats[0][skip_head // 2 :] = (
-                        torch.from_numpy(npy).unsqueeze(0).to(self.device)
-                        * self.index_rate
-                        + (1 - self.index_rate) * feats[0][skip_head // 2 :]
-                    )
-                else:
+                npy, available = blend_index_features(
+                    npy, score, ix, self.big_npy, self.index_rate
+                )
+                if self.config.is_half:
+                    npy = npy.astype("float16")
+                feats[0][skip_head // 2 :] = torch.from_numpy(npy).to(self.device)
+                if report_status and not available.all():
                     printt(
-                        i18n("索引无效：必须使用added_xxxx.index，不能使用trained_xxxx.index")
+                        i18n("索引检索中有%s帧没有可用邻居，已保留原始特征")
+                        % np.count_nonzero(~available)
                     )
             else:
                 if report_status:
-                    printt(i18n("索引检索失败或未启用"))
+                    if self.index_rate == 0:
+                        printt(i18n("索引未启用（索引率为0）"))
+                    else:
+                        printt(i18n("索引未加载，已保留原始特征"))
         except Exception:
             traceback.print_exc()
             printt(i18n("索引检索失败"))

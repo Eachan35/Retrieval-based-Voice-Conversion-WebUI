@@ -4,6 +4,7 @@ import html
 import copy
 import re
 import warnings
+import asyncio
 
 warnings.filterwarnings(
     "ignore",
@@ -86,6 +87,35 @@ logging.getLogger("numba").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+def _install_windows_disconnect_handler():
+    if os.name != "nt":
+        return
+
+    def handle_exception(loop, context):
+        message = context.get("message", "")
+        error = context.get("exception")
+        if (
+            "_ProactorBasePipeTransport._call_connection_lost" in message
+            and isinstance(error, ConnectionResetError)
+            and getattr(error, "winerror", None) == 10054
+        ):
+            return
+        loop.default_exception_handler(context)
+
+    policy_type = type(asyncio.get_event_loop_policy())
+
+    class RVCEventLoopPolicy(policy_type):
+        def new_event_loop(self):
+            loop = super().new_event_loop()
+            loop.set_exception_handler(handle_exception)
+            return loop
+
+    asyncio.set_event_loop_policy(RVCEventLoopPolicy())
+
+
+_install_windows_disconnect_handler()
 
 
 def find_available_port(start_port, host="0.0.0.0"):
@@ -226,8 +256,13 @@ def clean():
 
 
 def selected_speaker_id(slider_value, dropdown_value):
-    value = dropdown_value if dropdown_value is not None else slider_value
+    value = dropdown_value
+    if value is None or (isinstance(value, str) and not value.strip()):
+        value = slider_value
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return 0
     if isinstance(value, str):
+        value = value.strip()
         match = re.search(r"ID\s*[:：]\s*(\d+)\s*[)）]?\s*$", value)
         if match:
             return int(match.group(1))
@@ -1836,7 +1871,11 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
     with gr.Tabs():
         with gr.TabItem(i18n("模型推理")):
             with gr.Row():
-                sid0 = gr.Dropdown(label=i18n("推理音色"), choices=sorted(names))
+                sid0 = gr.Dropdown(
+                    label=i18n("推理音色"),
+                    choices=sorted(names),
+                    value="CreatorV2.pth" if "CreatorV2.pth" in names else None,
+                )
                 with gr.Column():
                     refresh_button = gr.Button(
                         i18n("刷新音色列表"), variant="primary"
@@ -1869,7 +1908,7 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                                 with gr.Column(scale=1, min_width=120):
                                     vc_transform0 = gr.Number(
                                         label=i18n("变调(整数, 半音数量, 升八度12降八度-12)"),
-                                        value=0,
+                                        value=11,
                                     )
                                 with gr.Column(scale=2, min_width=200):
                                     f0method0 = gr.Radio(
@@ -1922,6 +1961,7 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                             )
                             file_index1 = gr.Textbox(
                                 label=i18n("特征检索库文件路径（选择模型后自动匹配，可手动修改）"),
+                                value=r"E:\PyProject\RVC\logs\CreatorV2.index",
                                 placeholder="C:\\Users\\Desktop\\model_example.index",
                                 interactive=True,
                             )
@@ -1974,14 +2014,14 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                     with gr.Column():
                         vc_transform1 = gr.Number(
                             label=i18n("变调(整数, 半音数量, 升八度12降八度-12)"),
-                            value=0,
+                            value=11,
                         )
                         opt_input = gr.Textbox(
                             label=i18n("指定输出文件夹"), value="opt"
                         )
                         file_index3 = gr.Textbox(
                             label=i18n("特征检索库文件路径（选择模型后自动匹配，可手动修改）"),
-                            value="",
+                            value=r"E:\PyProject\RVC\logs\CreatorV2.index",
                             interactive=True,
                         )
                         f0method1 = gr.Radio(
@@ -2087,6 +2127,19 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                         file_index3,
                     ],
                     api_name="infer_change_voice",
+                )
+                app.load(
+                    fn=vc.get_vc,
+                    inputs=[sid0, protect0, protect1],
+                    outputs=[
+                        spk_item,
+                        spk_item_dropdown,
+                        protect0,
+                        protect1,
+                        file_index1,
+                        file_index3,
+                    ],
+                    api_name="infer_load_default_voice",
                 )
                 spk_item.change(
                     fn=update_speaker_index,

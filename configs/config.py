@@ -99,7 +99,10 @@ def _detect_directml():
         return False, None
 
 
-DML_AVAILABLE, DML_DEVICE = _detect_directml()
+if IS_GPU and "--dml" not in sys.argv:
+    DML_AVAILABLE, DML_DEVICE = False, None
+else:
+    DML_AVAILABLE, DML_DEVICE = _detect_directml()
 
 if GPU_PROFILES:
     infer_device, infer_dtype, _, infer_gpu_mem = max(

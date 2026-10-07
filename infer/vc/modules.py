@@ -286,27 +286,28 @@ class VC:
                 if os.path.exists(file_index)
                 else "%s：%s" % (i18n("索引"), i18n("未使用"))
             )
-            return (
-                inference_status(
-                    "单次推理",
-                    "成功",
-                    "%s\n%s：%s %.2fs | F0 %.2fs | %s %.2fs"
-                    % (
-                        index_info,
-                        i18n("耗时"),
-                        i18n("特征"),
-                        times[0],
-                        times[1],
-                        i18n("合成"),
-                        times[2],
-                    ),
+            status = inference_status(
+                "单次推理",
+                "成功",
+                "%s\n%s：%s %.2fs | F0 %.2fs | %s %.2fs"
+                % (
+                    index_info,
+                    i18n("耗时"),
+                    i18n("特征"),
+                    times[0],
+                    times[1],
+                    i18n("合成"),
+                    times[2],
                 ),
-                (tgt_sr, audio_opt),
             )
+            print(status, flush=True)
+            return status, (tgt_sr, audio_opt)
         except Exception:
             info = traceback.format_exc()
             logger.warning(info)
-            return inference_status("单次推理", "失败", info), (None, None)
+            status = inference_status("单次推理", "失败", info)
+            print(status, flush=True)
+            return status, (None, None)
 
     def vc_multi(
         self,

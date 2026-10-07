@@ -91,12 +91,12 @@ if __name__ == "__main__":
                 data["rmvpe"] = data["f0method"] == "rmvpe"
                 data["fcpe"] = data["f0method"] == "fcpe"
                 if data["sg_hostapi"] in self.hostapis:
-                    self.update_devices(hostapi_name=data["sg_hostapi"])
+                    self.update_devices(hostapi_name=data["sg_hostapi"], refresh=False)
                     if (
                         data["sg_input_device"] not in self.input_devices
                         or data["sg_output_device"] not in self.output_devices
                     ):
-                        self.update_devices()
+                        self.update_devices(refresh=False)
                         data["sg_hostapi"] = self.hostapis[0]
                         data["sg_input_device"] = self.input_devices[
                             self.input_devices_indices.index(sd.default.device[0])
@@ -420,6 +420,8 @@ if __name__ == "__main__":
                 if event == sg.WINDOW_CLOSED:
                     self.stop_stream()
                     exit()
+                if event == "-INFER-TIME-":
+                    self.window["infer_time"].update(values[event])
                 if event == "reload_devices" or event == "sg_hostapi":
                     self.gui_config.sg_hostapi = values["sg_hostapi"]
                     self.update_devices(hostapi_name=values["sg_hostapi"])
@@ -518,7 +520,10 @@ if __name__ == "__main__":
                     self.gui_config.O_noise_reduce = values["O_noise_reduce"]
                 elif event in ["vc", "im"]:
                     self.function = event
-                elif event == "stop_vc" or event != "start_vc":
+                elif event == "stop_vc" or event not in (
+                    "start_vc",
+                    "-INFER-TIME-",
+                ):
                     # Other parameters do not support hot update
                     self.stop_stream()
 
@@ -933,20 +938,25 @@ if __name__ == "__main__":
             )
             total_time = time.perf_counter() - start_time
             if flag_vc:
-                self.window["infer_time"].update(int(total_time * 1000))
+                self.window.write_event_value(
+                    "-INFER-TIME-", int(total_time * 1000)
+                )
             printt(i18n("推理耗时：%.2f秒"), total_time)
 
-        def update_devices(self, hostapi_name=None):
+        def update_devices(self, hostapi_name=None, refresh=True):
             """获取设备列表"""
             global flag_vc
             flag_vc = False
-            sd._terminate()
-            sd._initialize()
-            devices = sd.query_devices()
-            hostapis = sd.query_hostapis()
-            for hostapi in hostapis:
-                for device_idx in hostapi["devices"]:
-                    devices[device_idx]["hostapi_name"] = hostapi["name"]
+            if refresh:
+                sd._terminate()
+                sd._initialize()
+                self._audio_devices = sd.query_devices()
+                self._audio_hostapis = sd.query_hostapis()
+                for hostapi in self._audio_hostapis:
+                    for device_idx in hostapi["devices"]:
+                        self._audio_devices[device_idx]["hostapi_name"] = hostapi["name"]
+            devices = self._audio_devices
+            hostapis = self._audio_hostapis
             self.hostapis = [hostapi["name"] for hostapi in hostapis]
             if hostapi_name not in self.hostapis:
                 hostapi_name = self.hostapis[0]
