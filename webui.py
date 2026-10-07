@@ -1961,7 +1961,7 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                             )
                             file_index1 = gr.Textbox(
                                 label=i18n("特征检索库文件路径（选择模型后自动匹配，可手动修改）"),
-                                value=r"E:\PyProject\RVC\logs\CreatorV2.index",
+                                value=os.path.join(now_dir, "logs", "CreatorV2.index"),
                                 placeholder="C:\\Users\\Desktop\\model_example.index",
                                 interactive=True,
                             )
@@ -2021,7 +2021,7 @@ with gr.Blocks(title="RVC WebUI", css=TRAINING_INFO_CSS) as app:
                         )
                         file_index3 = gr.Textbox(
                             label=i18n("特征检索库文件路径（选择模型后自动匹配，可手动修改）"),
-                            value=r"E:\PyProject\RVC\logs\CreatorV2.index",
+                            value=os.path.join(now_dir, "logs", "CreatorV2.index"),
                             interactive=True,
                         )
                         f0method1 = gr.Radio(
