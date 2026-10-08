@@ -4,6 +4,7 @@ import sys
 now_dir = os.path.dirname(os.path.abspath(__file__))
 
 from tools.file_io import read_text
+from tools.pitch_compression import PitchCompressionSettings
 
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
@@ -48,6 +49,7 @@ if __name__ == "__main__":
             self.pth_path = ""
             self.index_path = ""
             self.pitch = 0
+            self.dynamic_f0 = PitchCompressionSettings()
             self.formant=0.0
             self.sr_type = "sr_model"
             self.block_time = 0.25  # s
@@ -141,6 +143,11 @@ if __name__ == "__main__":
                     data["pm"] = data["f0method"] == "pm"
                     data["rmvpe"] = data["f0method"] == "rmvpe"
                     data["fcpe"] = data["f0method"] == "fcpe"
+            try:
+                data.update(PitchCompressionSettings.from_mapping(data).to_mapping())
+            except (TypeError, ValueError):
+                printt("动态音高配置无效，已使用默认参数")
+                data.update(PitchCompressionSettings().to_mapping())
             return data
 
         def launcher(self):
@@ -388,6 +395,41 @@ if __name__ == "__main__":
                     ),
                 ],
                 [
+                    sg.Frame(
+                        title=i18n("动态音高压缩"),
+                        layout=[
+                            [sg.Checkbox(
+                                i18n("启用动态音高压缩"), key="dynamic_f0_enabled",
+                                default=data["dynamic_f0_enabled"], enable_events=True,
+                            )],
+                            [
+                                sg.Text(i18n("阈值 (Hz)")),
+                                sg.Slider(range=(150, 1000), resolution=10, orientation="h",
+                                          size=(16, 15), key="dynamic_f0_threshold_hz",
+                                          default_value=data["dynamic_f0_threshold_hz"],
+                                          enable_events=True),
+                                sg.Text(i18n("压缩比")),
+                                sg.Slider(range=(1, 6), resolution=0.1, orientation="h",
+                                          size=(16, 15), key="dynamic_f0_ratio",
+                                          default_value=data["dynamic_f0_ratio"],
+                                          enable_events=True),
+                            ],
+                            [
+                                sg.Text(i18n("软拐点 (半音)")),
+                                sg.Slider(range=(0, 12), resolution=0.5, orientation="h",
+                                          size=(16, 15), key="dynamic_f0_knee_semitones",
+                                          default_value=data["dynamic_f0_knee_semitones"],
+                                          enable_events=True),
+                                sg.Text(i18n("平滑 (ms)")),
+                                sg.Slider(range=(0, 200), resolution=5, orientation="h",
+                                          size=(16, 15), key="dynamic_f0_smoothing_ms",
+                                          default_value=data["dynamic_f0_smoothing_ms"],
+                                          enable_events=True),
+                            ],
+                        ],
+                    ),
+                ],
+                [
                     sg.Button(i18n("开始音频转换"), key="start_vc"),
                     sg.Button(i18n("停止音频转换"), key="stop_vc"),
                     sg.Radio(
@@ -473,6 +515,7 @@ if __name__ == "__main__":
                                 [values["pm"], values["rmvpe"], values["fcpe"]].index(True)
                             ],
                         }
+                        settings.update(self.gui_config.dynamic_f0.to_mapping())
                         with open(realtime_config_path, "w", encoding="utf8") as j:
                             json.dump(settings, j)
                         if self.stream is not None:
@@ -528,6 +571,11 @@ if __name__ == "__main__":
                     self.stop_stream()
 
         def set_values(self, values):
+            try:
+                self.gui_config.dynamic_f0 = PitchCompressionSettings.from_mapping(values)
+            except (TypeError, ValueError) as error:
+                sg.popup(str(error))
+                return False
             if len(values["pth_path"].strip()) == 0:
                 sg.popup(i18n("请选择pth文件"))
                 return False
@@ -581,6 +629,8 @@ if __name__ == "__main__":
                 self.config,
                 self.rvc if hasattr(self, "rvc") else None,
             )
+            self.rvc.pitch_compression = self.gui_config.dynamic_f0
+            printt("动态音高压缩：%s", self.gui_config.dynamic_f0.to_mapping())
             self.gui_config.samplerate = (
                 self.rvc.tgt_sr
                 if self.gui_config.sr_type == "sr_model"
@@ -741,8 +791,7 @@ if __name__ == "__main__":
                 self.output_buffer.zero_()
                 self.sola_buffer.zero_()
                 self.nr_buffer.zero_()
-                self.rvc.cache_pitch.zero_()
-                self.rvc.cache_pitchf.zero_()
+                self.rvc.reset_pitch_cache()
 
         def start_stream(self):
             global flag_vc

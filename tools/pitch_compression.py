@@ -2,6 +2,54 @@
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
+from scipy.signal import lfilter
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PitchCompressionSettings:
+    enabled: bool = True
+    threshold_hz: float = 450.0
+    ratio: float = 2.0
+    knee_semitones: float = 4.0
+    smoothing_ms: float = 30.0
+
+    def __post_init__(self):
+        compress_f0([], self.threshold_hz, self.ratio, self.knee_semitones,
+                    self.smoothing_ms)
+
+    @classmethod
+    def from_mapping(cls, values):
+        defaults = cls()
+        return cls(**{
+            name: (bool(values.get("dynamic_f0_" + name, getattr(defaults, name)))
+                   if name == "enabled" else
+                   float(values.get("dynamic_f0_" + name, getattr(defaults, name))))
+            for name in cls.__dataclass_fields__
+        })
+
+    def to_mapping(self):
+        return {"dynamic_f0_" + name: getattr(self, name)
+                for name in self.__dataclass_fields__}
+
+
+def compress_f0_causal(f0, settings, hop_seconds=0.01):
+    """Process a RAW history window once, never an already compressed cache."""
+    output, reduction = compress_f0(
+        f0, settings.threshold_hz, settings.ratio, settings.knee_semitones,
+        smoothing_ms=0, hop_seconds=hop_seconds,
+    )
+    if settings.smoothing_ms == 0 or len(reduction) == 0:
+        return output, reduction
+    alpha = np.exp(-hop_seconds / (settings.smoothing_ms / 1000))
+    voiced = np.asarray(f0) > 0
+    boundaries = np.diff(np.r_[False, voiced, False].astype(np.int8))
+    for start, end in zip(np.flatnonzero(boundaries == 1),
+                          np.flatnonzero(boundaries == -1)):
+        reduction[start:end] = lfilter(
+            [1 - alpha], [1, -alpha], reduction[start:end]
+        )
+    return np.asarray(f0) * np.exp2(-reduction / 12), reduction
 
 
 def compress_f0(f0, threshold_hz, ratio=2.0, knee_semitones=4.0,

@@ -11,6 +11,7 @@ from torchaudio.transforms import Resample
 from infer.hubert import extract_hubert_features, load_hubert_model
 from i18n.i18n import I18nAuto
 from tools.cuda_graph import run_cuda_graph
+from tools.pitch_compression import PitchCompressionSettings, compress_f0_causal
 
 
 i18n = I18nAuto()
@@ -114,6 +115,8 @@ class RVC:
             self.cache_pitchf = torch.zeros(
                 1024, device=self.device, dtype=torch.float32
             )
+            self.cache_pitchf_raw = torch.zeros_like(self.cache_pitchf)
+            self.pitch_compression = PitchCompressionSettings(enabled=False)
             self.infer_count = 0
 
             self.resample_kernel = {}
@@ -154,6 +157,36 @@ class RVC:
 
     def change_key(self, new_key):
         self.f0_up_key = new_key
+
+    def reset_pitch_cache(self):
+        self.cache_pitch.zero_()
+        self.cache_pitchf.zero_()
+        self.cache_pitchf_raw.zero_()
+
+    def update_pitch_cache(self, pitch, pitchf, shift):
+        self.cache_pitch[:-shift] = self.cache_pitch[shift:].clone()
+        self.cache_pitchf[:-shift] = self.cache_pitchf[shift:].clone()
+        self.cache_pitchf_raw[:-shift] = self.cache_pitchf_raw[shift:].clone()
+        self.cache_pitch[4 - pitch.shape[0]:] = pitch[3:-1]
+        self.cache_pitchf_raw[4 - pitch.shape[0]:] = pitchf[3:-1]
+        if not self.pitch_compression.enabled:
+            self.cache_pitchf[4 - pitch.shape[0]:] = pitchf[3:-1]
+            return
+        settings = self.pitch_compression
+        # Compensate the existing formant resampling when interpreting the Hz threshold.
+        settings = PitchCompressionSettings(
+            threshold_hz=settings.threshold_hz / pow(2, self.formant_shift / 12),
+            ratio=settings.ratio, knee_semitones=settings.knee_semitones,
+            smoothing_ms=settings.smoothing_ms,
+        )
+        compressed, _ = compress_f0_causal(
+            self.cache_pitchf_raw.detach().cpu().numpy(), settings
+        )
+        continuous = torch.as_tensor(compressed, device=self.device, dtype=torch.float32)
+        coarse, continuous = self.get_f0_post(continuous)
+        coarse.masked_fill_(self.cache_pitch == 0, 0)
+        self.cache_pitch.copy_(coarse)
+        self.cache_pitchf.copy_(continuous)
 
     def change_formant(self, new_formant):
         self.formant_shift = new_formant
@@ -305,10 +338,7 @@ class RVC:
                 f0method,
             )
             shift = block_frame_16k // 160
-            self.cache_pitch[:-shift] = self.cache_pitch[shift:].clone()
-            self.cache_pitchf[:-shift] = self.cache_pitchf[shift:].clone()
-            self.cache_pitch[4 - pitch.shape[0] :] = pitch[3:-1]
-            self.cache_pitchf[4 - pitch.shape[0] :] = pitchf[3:-1]
+            self.update_pitch_cache(pitch, pitchf, shift)
             cache_pitch = self.cache_pitch[None, -p_len:]
             cache_pitchf = self.cache_pitchf[None, -p_len:] * return_length2 / return_length
         t4 = ttime()
